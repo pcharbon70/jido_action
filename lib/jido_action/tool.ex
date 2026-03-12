@@ -8,11 +8,13 @@ defmodule Jido.Action.Tool do
   ## Tool Formats
 
   - `to_tool/1` - Returns a generic tool map with name, description, function, and schema
+  - `to_tool/2` - Same as `to_tool/1` with JSON schema options (e.g., strict mode)
 
   ## Utility Functions
 
   - `convert_params_using_schema/2` - Normalizes LLM arguments (string keys → atom keys, type coercion)
   - `build_parameters_schema/1` - Converts action schema to JSON Schema format
+  - `build_parameters_schema/2` - Same as `build_parameters_schema/1` with schema options
   - `execute_action/3` - Executes an action with schema-based param conversion
   """
 
@@ -47,12 +49,15 @@ defmodule Jido.Action.Tool do
       }
   """
   @spec to_tool(module()) :: tool()
-  def to_tool(action) when is_atom(action) do
+  def to_tool(action) when is_atom(action), do: to_tool(action, [])
+
+  @spec to_tool(module(), keyword()) :: tool()
+  def to_tool(action, opts) when is_atom(action) and is_list(opts) do
     %{
       name: action.name(),
       description: action.description(),
       function: &execute_action(action, &1, &2),
-      parameters_schema: build_parameters_schema(action.schema())
+      parameters_schema: build_parameters_schema(action.schema(), opts)
     }
   end
 
@@ -86,21 +91,49 @@ defmodule Jido.Action.Tool do
   Supports both atom and string input keys, and preserves unknown keys (open validation).
   """
   def convert_params_using_schema(params, schema) when is_map(params) do
-    schema_keys = Schema.known_keys(schema)
+    case Schema.schema_type(schema) do
+      :json_schema ->
+        convert_params_using_json_schema(params, schema)
 
+      _ ->
+        schema_keys = Schema.known_keys(schema)
+        convert_params_using_known_keys(params, schema, schema_keys)
+    end
+  end
+
+  defp convert_params_using_json_schema(params, schema) do
+    key_pairs =
+      schema
+      |> Schema.json_schema_known_key_forms()
+      |> Enum.flat_map(fn
+        %{atom: atom, string: string} when is_atom(atom) and not is_nil(atom) ->
+          [{atom, string}]
+
+        _ ->
+          []
+      end)
+
+    convert_params_using_key_pairs(params, schema, key_pairs)
+  end
+
+  defp convert_params_using_known_keys(params, schema, schema_keys) do
+    key_pairs = Enum.map(schema_keys, fn key -> {key, to_string(key)} end)
+    convert_params_using_key_pairs(params, schema, key_pairs)
+  end
+
+  defp convert_params_using_key_pairs(params, schema, key_pairs) do
     {known_converted, unknown_params} =
-      Enum.reduce(schema_keys, {%{}, params}, fn key, {known_acc, rest} ->
-        string_key = to_string(key)
-        {val_atom, rest} = Map.pop(rest, key, :__missing__)
+      Enum.reduce(key_pairs, {%{}, params}, fn {key, string_key}, {known_acc, rest} ->
+        {atom_value, rest} = Map.pop(rest, key, :__missing__)
 
         {value, rest} =
-          case val_atom do
+          case atom_value do
             :__missing__ ->
               Map.pop(rest, string_key, :__missing__)
 
             _ ->
-              {_val_string, rest2} = Map.pop(rest, string_key, :__missing__)
-              {val_atom, rest2}
+              {_dropped_string_value, rest2} = Map.pop(rest, string_key, :__missing__)
+              {atom_value, rest2}
           end
 
         case value do
@@ -167,7 +200,9 @@ defmodule Jido.Action.Tool do
     A map representing the parameters schema in a format compatible with LangChain.
   """
   @spec build_parameters_schema(Schema.t()) :: map()
-  def build_parameters_schema(schema) do
-    Schema.to_json_schema(schema)
-  end
+  def build_parameters_schema(schema), do: build_parameters_schema(schema, [])
+
+  @spec build_parameters_schema(Schema.t(), keyword()) :: map()
+  def build_parameters_schema(schema, opts) when is_list(opts),
+    do: Schema.to_json_schema(schema, opts)
 end

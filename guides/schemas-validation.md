@@ -13,6 +13,15 @@ Jido Action supports two schema backends:
 
 Both are fully supported and can be used interchangeably. The `Jido.Action.Schema` adapter provides a unified interface.
 
+### JSON Schema Maps (Compatibility Bridge)
+
+Plain JSON Schema object maps are also accepted (for example from `json_spec`) as a
+compatibility bridge:
+
+- Runtime validation remains pass-through (`{:ok, data}`), preserving open validation semantics.
+- Known key extraction is atom-safe: it only uses existing atoms and never creates new ones from property names.
+- Tool conversion preserves unknown keys and still prefers atom input keys over string keys when both are provided.
+
 ## NimbleOptions Schemas
 
 NimbleOptions is the traditional choice for Elixir configuration validation. Use keyword lists to define your schema:
@@ -229,7 +238,7 @@ Behind the scenes, `Jido.Action.Schema` provides a unified interface:
 ```elixir
 # Detect schema type
 Jido.Action.Schema.schema_type(my_schema)
-# => :nimble | :zoi | :empty
+# => :nimble | :zoi | :json_schema | :empty
 
 # Validate data
 {:ok, validated} = Jido.Action.Schema.validate(schema, params)
@@ -240,6 +249,9 @@ keys = Jido.Action.Schema.known_keys(schema)
 
 # Convert to JSON Schema (for AI tools)
 json_schema = Jido.Action.Schema.to_json_schema(schema)
+
+# Strict mode (recursive `additionalProperties: false` for all objects)
+strict_json_schema = Jido.Action.Schema.to_json_schema(schema, strict: true)
 ```
 
 ## Open/Partial Validation
@@ -307,6 +319,12 @@ tool = MyApp.Actions.SearchProducts.to_tool()
 #        "required" => ["query"]
 #      }
 #    }
+
+# Action.to_tool/0 emits strict schemas by default for modern LLM tool APIs
+# (recursive `additionalProperties: false` on all object schemas).
+
+# To opt out and keep legacy non-strict schema generation:
+legacy_tool = Jido.Action.Tool.to_tool(MyApp.Actions.SearchProducts, strict: false)
 ```
 
 See the [AI Integration Guide](ai-integration.md) for more details.
